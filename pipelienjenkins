@@ -1,0 +1,65 @@
+node {
+    try {
+        def mavenHome = tool name: "maven3.9.5"
+
+        echo "The Job name is: ${JOB_NAME}"
+        echo "The Node name is:  ${NODE_NAME}"
+        echo "The Build Number is:  ${BUILD_NUMBER}"
+        echo "Jenkins Home path is: ${JENKINS_HOME}"
+
+        properties([
+            buildDiscarder(logRotator(artifactDaysToKeepStr: '', artifactNumToKeepStr: '5', daysToKeepStr: '', numToKeepStr: '5')),
+            pipelineTriggers([pollSCM('* * * * *')])
+        ])
+
+        stage('Checkoutcode') {
+            git credentialsId: '412549fe-4a44-4ff6-b6fc-9dce1fe30595', url: 'https://github.com/prasadNadella/maven-web-application.git'
+        }
+
+        stage('Build') {
+            sh "${mavenHome}/bin/mvn clean package"
+        }
+
+        stage('SonarQube Report') {
+            sh "${mavenHome}/bin/mvn sonar:sonar"
+        }
+
+        stage('Deploy to Nexus') {
+            sh "${mavenHome}/bin/mvn deploy"
+        }
+
+        stage('Deploy to Tomcat') {
+            sshagent(['d47094f9-750f-4336-820f-eed71f15f70f']) {
+                sh "scp -o StrictHostKeyChecking=no target/maven-web-application.war ec2-user@3.87.121.14:/opt/apache-tomcat-10.1.16/webapps/"
+            }
+        }
+    } catch (Exception e) {
+        currentBuild.result = "FAILURE"
+        throw e
+    } finally {
+        notifyBuild(currentBuild.result)
+    }
+}
+
+def notifyBuild(String buildStatus = 'STARTED') {
+    // build status of null means successful
+    buildStatus = buildStatus ?: 'SUCCESSFUL'
+
+    // Default values
+    def colorName = 'RED'
+    def colorCode = '#FF0000'
+    def subject = "${buildStatus}: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'"
+    def summary = "${subject} (${env.BUILD_URL})"
+
+    // Override default values based on build status
+    if (buildStatus == 'STARTED') {
+        colorName = 'YELLOW'
+        colorCode = '#FFFF00'
+    } else if (buildStatus == 'SUCCESSFUL') {
+        colorName = 'GREEN'
+        colorCode = '#00FF00'
+    }
+
+    // Send notifications
+    slackSend(color: colorCode, message: summary)
+}
